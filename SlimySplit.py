@@ -49,7 +49,7 @@ class Bush(Actor):
 
 
 # Creating global game variable (registers itself in Globals static class)
-game = Game().init().target_fps(120).set_background_color(Colors.darkgreen).set_debug(False)
+game = Game().init().target_fps(120).set_background_color(Colors.darkgreen).set_debug(True)
 
 # Main scene, load it and create an alias for later access
 scene = Scene()
@@ -79,9 +79,9 @@ player.shadow.size=player.root.size
 
 camera.set_local_position(vec3(0, 0, 0))
 
-point_light1 = PointLight(scene, None, vec3(0., 0., 0.)).set_size(vec3(10, 10, 1)).set_color(vec3(255, 0, 0))
-point_light2 = PointLight(scene, None, vec3(10., 0., 0.)).set_size(vec3(10, 10, 1)).set_color(vec3(0, 255, 0))
-scene.register_light(point_light1).register_light(point_light2)
+point_light1 = PointLight(scene, None, vec3(0., 0., 0.)).set_size(vec3(10, 10, 1)).set_color(vec3(255, 150, 0))
+# point_light2 = PointLight(scene, None, vec3(10., 0., 0.)).set_size(vec3(10, 10, 1)).set_color(vec3(0, 255, 0))
+scene.register_light(point_light1)#.register_light(point_light2)
 
 # Main gameloop
 while game.is_alive():

@@ -799,6 +799,7 @@ class Scene:
         self._tilemaps : list[Tilemap] = []
         self._tilesets : list[Tileset] = []
         self._backgrounds : list[SpriteComponent] = []
+        self._ambient_light = 0.3
         self._lights : list[Light] = []
         self._lightmap : pygame.Surface = pygame.surface.Surface(vec2(10, 10))
     
@@ -823,7 +824,7 @@ class Scene:
     def draw(self):
         if self._lightmap.get_size()!=Globals.game.size:
             self._lightmap = pygame.surface.Surface(Globals.game.size)
-        self._lightmap.fill(color_from_vec3(50*vec3(1, 1, 1)))
+        self._lightmap.fill(color_from_vec3(self._ambient_light*255*vec3(1, 1, 1)))
         if not self.manual_rendering:
             for background in self._backgrounds:
                 background.draw()
