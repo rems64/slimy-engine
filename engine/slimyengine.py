@@ -47,7 +47,64 @@ def replace_extension(path:str, ext:str)->str:
     p = Path(path)
     p=p.with_suffix('.'+ext)
     return p.resolve().as_posix()
-    
+
+def color_from_vec3(vector:vec3) -> pygame.Color:
+    return pygame.Color(int(vector.x), int(vector.y), int(vector.z))
+
+
+def generate_radial_gradient(color1:vec3, alpha1:int, color2:vec3, alpha2:int, size:vec2=vec2(512, 512)):
+    temp_surface = pygame.Surface(size, pygame.SRCALPHA)
+
+    # use this to set the amount of 'segments' we rotate our blend into
+    # this helps stop blends from looking 'boxy' or like a cross.
+    circular_smoothness_steps = 5
+
+    colour_1 = pygame.Color((int(color1.x), int(color1.y), int(color1.z), alpha1))
+    colour_1.r = colour_1.r//circular_smoothness_steps
+    colour_1.g = colour_1.g//circular_smoothness_steps
+    colour_1.b = colour_1.b//circular_smoothness_steps
+    colour_1.a = colour_1.a//circular_smoothness_steps
+
+    colour_2 = pygame.Color((int(color2.x), int(color2.y), int(color2.z), alpha2))
+    colour_2.r = colour_2.r//circular_smoothness_steps
+    colour_2.g = colour_2.g//circular_smoothness_steps
+    colour_2.b = colour_2.b//circular_smoothness_steps
+    colour_2.a = colour_2.a//circular_smoothness_steps
+
+
+    # 3x3 - starter
+    radial_grad_starter = pygame.Surface((3, 3), pygame.SRCALPHA)
+    radial_grad_starter.fill(colour_1)
+    radial_grad_starter.fill(colour_2, pygame.Rect(1, 1, 1, 1))
+
+    # 5x5 - starter
+    # radial_grad_starter = pygame.Surface((5, 5))
+    # radial_grad_starter.fill((0, 0, 0))
+    # radial_grad_starter.fill((255//circular_smoothness_steps,
+    #                           255//circular_smoothness_steps,
+    #                           255//circular_smoothness_steps), pygame.Rect(2, 1, 1, 3))
+    # radial_grad_starter.fill((255//circular_smoothness_steps,
+    #                           255//circular_smoothness_steps,
+    #                           255//circular_smoothness_steps), pygame.Rect(1, 2, 3, 1))
+
+
+    radial_grad = pygame.transform.smoothscale(radial_grad_starter, size)
+
+    for i in range(0, circular_smoothness_steps):
+        radial_grad_rot = pygame.transform.rotate(radial_grad, (360.0/circular_smoothness_steps) * i)
+
+        pos_rect = pygame.Rect((0, 0), size)
+
+        area_rect = pygame.Rect(0, 0, size.x, size.y)
+        area_rect.center = radial_grad_rot.get_width()//2, radial_grad_rot.get_height()//2
+        temp_surface.blit(radial_grad_rot, pos_rect,
+                        area=area_rect,
+                        special_flags=pygame.BLEND_RGBA_ADD)
+
+    # final_pos_rect = pygame.Rect((0, 0), (512, 512))
+    # final_pos_rect.center = 400, 400
+    return temp_surface
+
 class Colors:
     Color = pygame.Color
     black       = (0, 0, 0)
@@ -539,6 +596,13 @@ class SceneComponent(Component):
     def size(self, s):
         self._size = s
     
+    def set_size(self, size:vec3):
+        self._size = size
+        return self
+    
+    def get_size(self):
+        return self._size
+    
     def attach(self, parent:'SceneComponent'):
         Component.attach(self, parent)
         self._parent_pos = parent.get_world_position() if self._inherit_parent_position else vec3()
@@ -633,6 +697,43 @@ class DrawableComponent(SceneComponent, Drawable):
     def __lt__(self, other):
         return self._pos.y<other._pos.y
 
+
+class Light(DrawableComponent):
+    def __init__(self, scene:'Scene', parent: Union['SceneComponent', None] = None, pos: vec3 | None = None):
+        DrawableComponent.__init__(self, parent, pos)
+        self._strength:float = 1.
+        self._scene = scene
+        self._light_surface:pygame.Surface=pygame.surface.Surface((10, 10))
+        self._color:vec3 = vec3(255, 255, 255)
+    
+    def set_color(self, color:vec3):
+        self._color.x, self._color.y, self._color.z = color.x, color.y, color.z
+        return self
+    
+    def draw(self):
+        Drawable.draw(self)
+    
+    def render(self):
+        pass
+
+class PointLight(Light):
+    def __init__(self, scene:'Scene', parent: Union['SceneComponent', None] = None, pos: vec3 | None = None):
+        Light.__init__(self, scene, parent, pos)
+        # self._light_surface = pygame.Surface((100, 100))
+        # self._light_surface.fill('White')
+        self.render()
+    
+    def draw(self):
+        Light.draw(self)
+        self._scene.get_light_map().blit(self._light_surface, Globals.game.camera.world_to_screen(self._pos), special_flags=pygame.BLEND_ADD)
+    
+    def render(self):
+        Light.render(self)
+        screen_size = Globals.game.camera.world_size2_to_screen(self.size.xy)
+        self._light_surface = generate_radial_gradient(vec3(0, 0, 0), 255, self._color, 255, screen_size)
+
+
+
 class DebugDraw:
     def __init__(self, game) -> None:
         self.game : Game = game
@@ -698,6 +799,8 @@ class Scene:
         self._tilemaps : list[Tilemap] = []
         self._tilesets : list[Tileset] = []
         self._backgrounds : list[SpriteComponent] = []
+        self._lights : list[Light] = []
+        self._lightmap : pygame.Surface = pygame.surface.Surface(vec2(10, 10))
     
     def add_drawable_rec(self, obj : SceneComponent):
         if issubclass(type(obj), DrawableComponent):
@@ -710,13 +813,27 @@ class Scene:
     def register_component(self, component : SceneComponent):
         self._objects.append(component) # Add only the root component
         self.add_drawable_rec(component)
+        return self
+    
+    def register_light(self, light:Light):
+        self._lights.append(light)
+        light._scene = self
+        return self
     
     def draw(self):
+        if self._lightmap.get_size()!=Globals.game.size:
+            self._lightmap = pygame.surface.Surface(Globals.game.size)
+        self._lightmap.fill(color_from_vec3(50*vec3(1, 1, 1)))
         if not self.manual_rendering:
             for background in self._backgrounds:
                 background.draw()
             for obj in self._drawables:
                 obj.draw()
+            for light in self._lights:
+                light.render()
+                light.draw()
+            
+            Globals.game.screen.blit(self._lightmap, (0, 0), special_flags=pygame.BLEND_MULT)
     
     def update(self):
         for obj in self._objects:
@@ -759,6 +876,9 @@ class Scene:
             self._backgrounds.append(map_sprite)
         
         return sprites
+    
+    def get_light_map(self) -> pygame.Surface:
+        return self._lightmap
 
 class Level:
     def __init__(self) -> None:
