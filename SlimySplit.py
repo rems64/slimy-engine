@@ -49,7 +49,7 @@ class Bush(Actor):
 
 
 # Creating global game variable (registers itself in Globals static class)
-game = Game().init().target_fps(120).set_background_color(Colors.darkgreen).set_debug(True)
+game = Game().init().target_fps(120).set_background_color(Colors.darkgreen).set_debug(False)
 
 # Main scene, load it and create an alias for later access
 scene = Scene()
