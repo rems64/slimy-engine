@@ -28,9 +28,7 @@ class Player(Pawn):
             self.jump()
         
         if keys[pygame.K_g]:
-            l = 0.5 if Globals.game.camera.get_zoom()==1 else 1
-            Globals.game.camera.set_zoom(l)
-            Globals.game.debug_infos["zoom"]=str(l)
+            fire.start()
 
         if force.length>0:
             fac=10.
@@ -47,9 +45,14 @@ class Bush(Actor):
         self.bush = SpriteComponent(self.root, image_name="bush")
         self.bush.size = vec2(3, 3)
 
+class Fire(ParticleSystem):
+    def __init__(self, parent=None, pos=...):
+        ParticleSystem.__init__(self, parent, pos)
+        self._emitters = [FountainEmitter()]
+        self._emitters[0]._system=self
 
 # Creating global game variable (registers itself in Globals static class)
-game = Game().init().target_fps(120).set_background_color(Colors.darkgreen).set_debug(True)
+game = Game().init().target_fps(60).set_background_color(Colors.darkgreen).set_debug(True)
 
 # Main scene, load it and create an alias for later access
 scene = Scene()
@@ -79,9 +82,14 @@ player.shadow.size=player.root.size
 
 camera.set_local_position(vec3(0, 0, 0))
 
-point_light1 = PointLight(scene, None, vec3(0., 0., 0.)).set_size(vec3(10, 10, 1)).set_color(vec3(255, 150, 0))
-# point_light2 = PointLight(scene, None, vec3(10., 0., 0.)).set_size(vec3(10, 10, 1)).set_color(vec3(0, 255, 0))
+point_light1 = PointLight(scene, None, vec3(0., 0., 0.)).set_size(vec3(10, 10, 1)).set_color(vec3(255, 150, 0)).render()
+# point_light2 = PointLight(scene, None, vec3(10., 0., 0.)).set_size(vec3(10, 10, 1)).set_color(vec3(0, 255, 0)).render()
 scene.register_light(point_light1)#.register_light(point_light2)
+
+
+# Particles
+fire = Fire(None, vec3(0, 0, 0))
+world.register_particle_system(fire)
 
 # Main gameloop
 while game.is_alive():
@@ -97,5 +105,7 @@ while game.is_alive():
     camera._pos = set_z(player.root.get_world_position(), 0) # Math.lerp_squared(camera.pos, player.pos.xy, 0.001)
     # Finally draw the SpriteComponent (every objects which inherits from Drawable and is registered in scene)
     scene.draw()
+    fire.draw()
+    scene.light_pass()
     # Performs all debug draws, update delta time and wait idle until frame time is reached
     game.end_frame()

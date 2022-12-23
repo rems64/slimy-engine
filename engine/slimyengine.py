@@ -5,6 +5,7 @@ import sys
 import time
 import colorit
 from typing import List, Tuple, Union, Literal
+from collections import deque
 import numpy as np
 import json
 from pathlib import Path
@@ -25,6 +26,27 @@ def random_vec3_in_sphere(origin : vec3, radius : float) -> vec3:
 def random_vec3_at_height(origin : vec3, radius : float) -> vec3:
     dir = vec3(2*random.random()-1, 2*random.random()-1, 0).normalize()*random.random()
     return origin + radius*dir
+
+def perpendicular_vector(v:vec3):
+    if v[1] == 0 and v[2] == 0:
+        if v[0] == 0:
+            raise ValueError('Zero vector')
+        else:
+            return v.cross(vec3(0, 1, 0)).normalize()
+    return v.cross(vec3(1, 0, 0)).normalize()
+
+def random_vec3_in_cone(direction : vec3, angle : float) -> vec3:
+    side = np.arctan(angle)
+    v = vec3((2*random.random()-1)*side, (2*random.random()-1)*side, 0)
+    p1 = perpendicular_vector(direction)
+    p2 = direction.cross(p1)
+    return direction+v[0]*p1+v[1]*p2
+
+def random_vec2_in_cone(direction : vec2, angle : float) -> vec2:
+    r, theta = direction.as_polar()
+    v=vec2()
+    v.from_polar([r, theta+(2*random.random()-1)*angle])
+    return v
 
 def randrange(a:float=0.9, b:float=1.1) -> float:
     return random.random()*(b-a)+a
@@ -104,6 +126,21 @@ def generate_radial_gradient(color1:vec3, alpha1:int, color2:vec3, alpha2:int, s
     # final_pos_rect = pygame.Rect((0, 0), (512, 512))
     # final_pos_rect.center = 400, 400
     return temp_surface
+
+
+def dt_to_seconds(dt:float) -> int:
+    return int(dt*1E6)
+
+class MutableBool:
+    def __init__(self, val:bool) -> None:
+        self._val = val
+        pass
+
+    def get(self):
+        return self._val
+    
+    def set(self, val):
+        self._val=val
 
 class Colors:
     Color = pygame.Color
@@ -233,10 +270,11 @@ class Image:
         if not self._data: raise RuntimeError("Uninitialized texture")
         return self._data
     
-    def resize(self, size) -> None:
+    def resize(self, size) -> 'Image':
         assert self._data!=None
         self._data = pygame.transform.scale(self._data, size)
         self.size = size
+        return self
 
     
     @property
@@ -376,11 +414,7 @@ class Game:
 
         self.__frame_debugs = []
         self.debug_infos:dict[str, str] = {"fps": "0", "deltatime": "0"}
-        self._no_debug = False
-
-        self.load_image("default", "engine/default.png")
-        self.load_image("default_shadow", "engine/default_shadow.png")
-    
+        self._no_debug = False    
     def init(self, title="Slimy Engine"):
         pygame.init()
         flags = pygame.RESIZABLE | pygame.DOUBLEBUF
@@ -389,6 +423,11 @@ class Game:
         pygame.display.set_caption(title)
         self._clock = pygame.time.Clock()
         self.load_font("debug_default", "engine/debug_font.ttf")
+
+        self.load_image("default", "engine/default.png")
+        self.load_image("default_shadow", "engine/default_shadow.png")
+        self.load_image("default_particle", "engine/default_particle.png")
+
         return self
     
     def load_font(self, name, path, size=28, force_reload=False):
@@ -421,10 +460,10 @@ class Game:
                     self.__images[name][s] = img
                     return img
                 else:
-                    return max(self.__images[name])[1]
+                    return self.__images[name][max(self.__images[name])]
         if not path:
             raise RuntimeError("Never loaded this resource and no path specified ("+name+")")
-        im = pygame.image.load(self.resource_path(path))
+        im = pygame.image.load(self.resource_path(path)).convert_alpha()
         log("Loading image {} from disk with {}".format(name, "size {}".format(size) if size else "default size"), logTypes.trace)
         if size:
             im = pygame.transform.scale(im, size)
@@ -452,6 +491,7 @@ class Game:
     def on_resize(self, event):
         self.size = (event.dict['size'][0], event.dict['size'][1])
         self.camera.update_screen_size(event.dict['size'])
+        self.active_scene.update_screen_size(event.dict['size'])
         pass
     
     def begin_frame(self, dont_clear=False):
@@ -731,8 +771,110 @@ class PointLight(Light):
         Light.render(self)
         screen_size = Globals.game.camera.world_size2_to_screen(self.size.xy)
         self._light_surface = generate_radial_gradient(vec3(0, 0, 0), 255, self._color, 255, screen_size)
+        return self
 
+class ParticleEmitter(Drawable):
+    def __init__(self, system:Union[None,'ParticleSystem']=None):
+        Drawable.__init__(self)
+        self._rate = 1.0
+        self._elapsed_time:int = 0
+        self._particles:deque[tuple[int, MutableBool, vec3, vec3, int]]=deque()  # particle: id, is_alive, position, velocity, creation_time
+        self._sprite:Image=Globals.game.load_image("default_particle").resize((128, 128))
+        self._started = False
+        self._system = system
+        self.draw_size = vec2()
+        self._sprite_size = vec2(5., 5.)
+        self._size_locked = False
+        self._pos = vec3()
+        self._track_component:None|SceneComponent = None
+    
+    def track_component(self, component:SceneComponent):
+        self._track_component = component
+    
+    def start(self) -> 'ParticleEmitter':
+        self._started = True
+        return self
+    
+    def tick(self, dt) -> None:
+        if not self._started: return
+        self._elapsed_time+=dt
+        if self._track_component:
+            self._pos = self._track_component.get_world_position()
+        
+        self.draw_size = Globals.game.camera.world_size2_to_screen(self._sprite_size)
+        if self.draw_size!=self._sprite.size:
+            log("Resizing particle sprite", logTypes.warning)
+            if (not self._size_locked):
+                self._sprite = Globals.game.load_image(self._sprite.name, self._sprite.path, self.draw_size)
+            else:
+                self._sprite.resize(self.draw_size)
+             
+        found_alive=False
+        up_to=0
+        i=-1
+        for particle in self._particles:
+            i+=1
+            id, is_alive, position, velocity, creation_time = particle
+            if not is_alive.get():
+                if not found_alive: up_to+=1
+                continue
+            found_alive=True
+            age = self._elapsed_time-creation_time
+            if age>5: is_alive.set(False)
+            
+            position+=velocity*dt
+        if not found_alive: self._particles=deque()
+        else:
+            for _ in range(up_to): self._particles.popleft()
+        Globals.game.debug_infos["particles_count"]=str(len(self._particles))
+        
+    def draw(self) -> None:
+        assert self._system!=None
+        screen = Globals.game.screen
+        camera = Globals.game.camera
+        screen_size = Globals.game.size
+        for particle in self._particles:
+            id, is_alive, position, _, _ = particle
+            if not is_alive.get(): continue
+            screen_pos = camera.world_to_screen(position+self._system.get_world_position())
 
+            if screen_pos.x+self.draw_size.x<0 or screen_pos.y+self.draw_size.y<0 or screen_pos.x-self.draw_size.x>screen_size[0] or screen_pos.y-self.draw_size.y>screen_size[1]: is_alive.set(False)
+            screen.blit(self._sprite.get_data(), screen_pos)
+
+class FountainEmitter(ParticleEmitter):
+    def __init__(self, system: Union[None, 'ParticleSystem'] = None):
+        ParticleEmitter.__init__(self, system)
+    
+    def tick(self, dt) -> None:
+        if not self._started: return
+        ParticleEmitter.tick(self, dt)
+
+        if random.random()>0.95:
+            self._particles.appendleft((0, MutableBool(True), self._pos.copy(), set_z(random_vec3_in_cone(vec3(0, -1, 0), np.pi/4*random.random()+np.pi/8)*1, 0), self._elapsed_time))
+
+class ParticleSystem(DrawableComponent):
+    def __init__(self, parent=None, pos=vec3()):
+        print(parent)
+        DrawableComponent.__init__(self, parent, pos)
+        self._emitters:list[ParticleEmitter]=[]
+    
+    def start(self) -> 'ParticleSystem':
+        for emitter in self._emitters:
+            emitter.start()
+        return self
+
+    def tick(self, dt) -> 'ParticleSystem':
+        for emitter in self._emitters:
+            emitter.tick(dt)
+        
+        return self
+
+    def draw(self) -> 'ParticleSystem':
+        DrawableComponent.draw(self)
+        for emitter in self._emitters:
+            emitter.draw()
+        
+        return self
 
 class DebugDraw:
     def __init__(self, game) -> None:
@@ -821,17 +963,23 @@ class Scene:
         light._scene = self
         return self
     
+    def update_screen_size(self, size:vec2):
+        for light in self._lights:
+                light.render()
+    
     def draw(self):
-        if self._lightmap.get_size()!=Globals.game.size:
-            self._lightmap = pygame.surface.Surface(Globals.game.size)
-        self._lightmap.fill(color_from_vec3(self._ambient_light*255*vec3(1, 1, 1)))
         if not self.manual_rendering:
             for background in self._backgrounds:
                 background.draw()
             for obj in self._drawables:
                 obj.draw()
+    
+    def light_pass(self):
+        if self._lightmap.get_size()!=Globals.game.size:
+            self._lightmap = pygame.surface.Surface(Globals.game.size)
+        self._lightmap.fill(color_from_vec3(self._ambient_light*255*vec3(1, 1, 1)))
+        if not self.manual_rendering:
             for light in self._lights:
-                light.render()
                 light.draw()
             
             Globals.game.screen.blit(self._lightmap, (0, 0), special_flags=pygame.BLEND_MULT)
@@ -896,6 +1044,7 @@ class Globals:
 class PhysicsWorld:
     def __init__(self):
         self.objects:List[PhysicsComponent] = []
+        self._particle_systems:list[ParticleSystem] = []
         self.limits = [vec3(-math.inf, -math.inf, -math.inf), vec3(math.inf, math.inf, math.inf)]
         self._draw_borders = True
         self.last_tick = time.time_ns()
@@ -910,6 +1059,11 @@ class PhysicsWorld:
         self.objects.append(obj)
         obj.world = self
 
+    def register_particle_system(self, obj:'ParticleSystem'):
+        assert issubclass(type(obj), ParticleSystem)
+        self._particle_systems.append(obj)
+        # obj.world = self
+
     def tick(self):
         self.tmp_tick=time.time_ns()
         dt = (self.tmp_tick-self.last_tick)*1.0E-9
@@ -919,6 +1073,9 @@ class PhysicsWorld:
         
         for obj in self.objects:
             obj.tick(dt)
+        
+        for system in self._particle_systems:
+            system.tick(dt)
     
     def line_trace(self, origin:vec3, direction:vec3):
         return vec3(origin.x, origin.y, 0)
@@ -1096,6 +1253,7 @@ class Actor(Object):
     def __init__(self, pos=vec3()):
         Object.__init__(self)
         self._root = SceneComponent(None, pos=pos)
+    
     
     @property
     def root(self):
