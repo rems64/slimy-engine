@@ -405,14 +405,14 @@ class Game:
         self._fonts : dict[str, pygame.font.Font] = {}
         self._clock : pygame.time.Clock = pygame.time.Clock()
         self._delta_time:float = 0.0
-        self.__alive = True
-        self.__target_fps = 60
-        self.__background_color = Colors.black
-        self.__events = []
-        self.__images = {}
+        self._alive = True
+        self._target_fps = 60
+        self._background_color = Colors.black
+        self._events = []
+        self._images = {}
         self.active_scene : Scene = Scene()
 
-        self.__frame_debugs = []
+        self._frame_debugs = []
         self.debug_infos:dict[str, str] = {"fps": "0", "deltatime": "0"}
         self._no_debug = False    
     def init(self, title="Slimy Engine"):
@@ -446,21 +446,21 @@ class Game:
         return os.path.join(base_path, relative_path)
 
     def load_image(self, name, path="", size=None, force_reload=False):
-        if self.__images.get(name):
-            if (not force_reload) and self.__images[name].get(get_image_size_tuple(size)):
-                return self.__images[name][get_image_size_tuple(size)]
+        if self._images.get(name):
+            if (not force_reload) and self._images[name].get(get_image_size_tuple(size)):
+                return self._images[name][get_image_size_tuple(size)]
             else:
                 if size:
-                    p=self.resource_path(next(iter(self.__images[name].values())).path)
+                    p=self.resource_path(next(iter(self._images[name].values())).path)
                     log("Loading image {} from disk with size ({}, {})".format(name, size[0], size[1]), logTypes.trace)
                     im = pygame.image.load(p).convert_alpha()
                     im = pygame.transform.scale(im, size)
                     s = im.get_size()
                     img = Image(name, vec2(s[0], s[1]), path, im)
-                    self.__images[name][s] = img
+                    self._images[name][s] = img
                     return img
                 else:
-                    return self.__images[name][max(self.__images[name])]
+                    return self._images[name][max(self._images[name])]
         if not path:
             raise RuntimeError("Never loaded this resource and no path specified ("+name+")")
         im = pygame.image.load(self.resource_path(path)).convert_alpha()
@@ -469,15 +469,15 @@ class Game:
             im = pygame.transform.scale(im, size)
         s = im.get_size()
         img = Image(name, vec2(s[0], s[1]), path, im)
-        self.__images[name] = {}
-        self.__images[name][s] = img
+        self._images[name] = {}
+        self._images[name][s] = img
         return img
 
     def is_alive(self):
-        return self.__alive
+        return self._alive
     
     def target_fps(self, fps):
-        self.__target_fps = fps
+        self._target_fps = fps
         return self
     
     def get_delta_time(self) -> float:
@@ -485,7 +485,7 @@ class Game:
     
     def set_background_color(self, color):
         assert type(color)==tuple
-        self.__background_color = color
+        self._background_color = color
         return self
     
     def on_resize(self, event):
@@ -498,19 +498,19 @@ class Game:
         events = pygame.event.get()
         for event in events:
             if event.type == pygame.QUIT:
-                self.__alive = False
+                self._alive = False
             if event.type == pygame.VIDEORESIZE:
                 self.on_resize(event)
                 pygame.display.update()
         if not dont_clear:
-            self.screen.fill(self.__background_color)
+            self.screen.fill(self._background_color)
     
     def end_frame(self):
         self._delta_time = self._clock.get_time()
         if not self._no_debug:
-            for debug in self.__frame_debugs:
+            for debug in self._frame_debugs:
                 debug.draw(self.screen)
-            self.__frame_debugs = []
+            self._frame_debugs = []
             current_height = 10
             self.debug_infos["fps"] = str(round(self._clock.get_fps()))
             self.debug_infos["deltatime"] = str(round(self._clock.get_time(), 1))
@@ -522,7 +522,7 @@ class Game:
                 current_height+=rect.height+5
         
         pygame.display.flip()
-        self._clock.tick(self.__target_fps)
+        self._clock.tick(self._target_fps)
         return
     
     def draw_debug_vector(self, start : vec3, end : vec3, color=(255,0,0), immediate=False):
@@ -534,7 +534,7 @@ class Game:
         if immediate:
             vector.draw(self.screen)
         else:
-            self.__frame_debugs.append(vector)
+            self._frame_debugs.append(vector)
         
     def draw_debug_rectangle(self, start : vec2, end : vec2, color=(0,0,255), immediate=False, thickness=1):
         if self._no_debug: return
@@ -546,7 +546,7 @@ class Game:
         if immediate:
             square.draw(self.screen)
         else:
-            self.__frame_debugs.append(square)
+            self._frame_debugs.append(square)
 
     def draw_debug_box(self, start : vec3, end : vec3, color=(0,0,255), immediate=False, thickness=1):
         if self._no_debug: return
@@ -558,7 +558,7 @@ class Game:
         if immediate:
             square.draw(self.screen)
         else:
-            self.__frame_debugs.append(square)
+            self._frame_debugs.append(square)
     
     def load_scene(self, scene:'Scene'):
         self.active_scene = scene
@@ -1133,7 +1133,7 @@ class FrictionForce(Force):
 
 class GravityForce(Force):
     def __init__(self, strength:float=-2):
-        super().__init__(vec3(0, 0, strength))
+        Force.__init__(self, vec3(0, 0, strength))
 
 class PhysicsComponent(DrawableComponent, SceneComponent):
     def __init__(self, parent, world : PhysicsWorld, pos=None, mass:float=1):
