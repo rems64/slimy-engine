@@ -142,6 +142,68 @@ class MutableBool:
     def set(self, val):
         self._val=val
 
+class BoundingBox:
+    def __init__(self, begin:None|vec3=None, end:None|vec3=None) -> None:
+        self._begin = begin if begin else vec3()
+        self._end = end if end else vec3()
+    
+    def intersect(self, other:'BoundingBox') -> bool:
+        if self._begin.x > other._end.x or self._end.x < other._begin.x:
+            return False
+        if self._begin.y > other._end.y or self._end.y < other._begin.y:
+            return False
+        if self._begin.z > other._end.z or self._end.z < other._begin.z:
+            return False
+        return True
+
+class Timeline:
+    def __init__(self) -> None:
+        pass
+
+    def get(self, t:float):
+        pass
+
+class FloatTimelineConstant(Timeline):
+    def __init__(self, val:float) -> None:
+        Timeline.__init__(self)
+        self._val = val
+    
+    def get(self, t:float)->float:
+        return self._val
+
+class FloatTimelineFadeIn(Timeline):
+    def __init__(self, percentage:float) -> None:
+        Timeline.__init__(self)
+        self._percentage:float=percentage
+    
+    def get(self, t:float)->float:
+        if t>self._percentage:
+            return 1.
+        return t/self._percentage
+
+class FloatTimelineFadeOut(Timeline):
+    def __init__(self, percentage:float) -> None:
+        Timeline.__init__(self)
+        self._percentage:float=percentage
+    
+    def get(self, t:float)->float:
+        if t<self._percentage:
+            return 1.
+        return 1-(t-self._percentage)/(1-self._percentage)
+
+class FloatTimelineFadeInOut(Timeline):
+    def __init__(self, percentage:float) -> None:
+        Timeline.__init__(self)
+        self._percentage:float=percentage
+    
+    def get(self, t:float)->float:
+        if t<self._percentage:
+            return t/self._percentage
+        elif t>1-self._percentage:
+            return 1-(t-(1-self._percentage))/(self._percentage)
+        else:
+            return 1.
+
 class Colors:
     Color = pygame.Color
     black       = (0, 0, 0)
@@ -149,6 +211,8 @@ class Colors:
     green       = (0, 255, 0)
     red         = (255, 0, 0)
     darkgreen   = (150, 215, 140)
+
+    white_a     = (255, 255, 255, 255)
 
 class logTypes:
     """
@@ -397,10 +461,10 @@ def get_image_size_tuple(size):
     raise RuntimeError("Unknown type for image size")
 
 class Game:
-    def __init__(self):
+    def __init__(self, size:tuple[int, int]=(640, 480)):
         if Globals.game: raise RuntimeError("There can exist only one game")
         Globals.game = self
-        self.size = (640, 480)
+        self.size = size
         self.title = ""
         self._fonts : dict[str, pygame.font.Font] = {}
         self._clock : pygame.time.Clock = pygame.time.Clock()
@@ -414,7 +478,8 @@ class Game:
 
         self._frame_debugs = []
         self.debug_infos:dict[str, str] = {"fps": "0", "deltatime": "0"}
-        self._no_debug = False    
+        self._no_debug = False
+    
     def init(self, title="Slimy Engine"):
         pygame.init()
         flags = pygame.RESIZABLE | pygame.DOUBLEBUF
@@ -535,6 +600,17 @@ class Game:
             vector.draw(self.screen)
         else:
             self._frame_debugs.append(vector)
+        
+    def draw_debug_spring(self, start : vec3, end : vec3, color=(255,0,0), immediate=False):
+        if self._no_debug: return
+        spring = DebugSpring(self)
+        spring._start = start
+        spring._end = end
+        spring._color = color
+        if immediate:
+            spring.draw(self.screen)
+        else:
+            self._frame_debugs.append(spring)
         
     def draw_debug_rectangle(self, start : vec2, end : vec2, color=(0,0,255), immediate=False, thickness=1):
         if self._no_debug: return
@@ -778,7 +854,7 @@ class ParticleEmitter(Drawable):
         Drawable.__init__(self)
         self._rate = 1.0
         self._elapsed_time:int = 0
-        self._particles:deque[tuple[int, MutableBool, vec3, vec3, int]]=deque()  # particle: id, is_alive, position, velocity, creation_time
+        self._particles:deque[tuple[int, MutableBool, vec3, vec3, list[int], int]]=deque()  # particle: id, is_alive, position, velocity, color, creation_time
         self._sprite:Image=Globals.game.load_image("default_particle").resize((128, 128))
         self._started = False
         self._system = system
@@ -787,6 +863,7 @@ class ParticleEmitter(Drawable):
         self._size_locked = False
         self._pos = vec3()
         self._track_component:None|SceneComponent = None
+        self._alpha_animate=FloatTimelineFadeInOut(0.1)
     
     def track_component(self, component:SceneComponent):
         self._track_component = component
@@ -796,6 +873,7 @@ class ParticleEmitter(Drawable):
         return self
     
     def tick(self, dt) -> None:
+        MAX_AGE=5
         if not self._started: return
         self._elapsed_time+=dt
         if self._track_component:
@@ -814,13 +892,15 @@ class ParticleEmitter(Drawable):
         i=-1
         for particle in self._particles:
             i+=1
-            id, is_alive, position, velocity, creation_time = particle
+            id, is_alive, position, velocity, color, creation_time = particle
             if not is_alive.get():
                 if not found_alive: up_to+=1
                 continue
             found_alive=True
             age = self._elapsed_time-creation_time
-            if age>5: is_alive.set(False)
+            normalized_age:float = age/MAX_AGE
+            if normalized_age>1: is_alive.set(False)
+            color[3]=int(self._alpha_animate.get(normalized_age)*255)
             
             position+=velocity*dt
         if not found_alive: self._particles=deque()
@@ -834,11 +914,12 @@ class ParticleEmitter(Drawable):
         camera = Globals.game.camera
         screen_size = Globals.game.size
         for particle in self._particles:
-            id, is_alive, position, _, _ = particle
+            id, is_alive, position, _, color, _ = particle
             if not is_alive.get(): continue
             screen_pos = camera.world_to_screen(position+self._system.get_world_position())
 
             if screen_pos.x+self.draw_size.x<0 or screen_pos.y+self.draw_size.y<0 or screen_pos.x-self.draw_size.x>screen_size[0] or screen_pos.y-self.draw_size.y>screen_size[1]: is_alive.set(False)
+            self._sprite.get_data().set_alpha(color[3])
             screen.blit(self._sprite.get_data(), screen_pos)
 
 class FountainEmitter(ParticleEmitter):
@@ -847,10 +928,12 @@ class FountainEmitter(ParticleEmitter):
     
     def tick(self, dt) -> None:
         if not self._started: return
-        ParticleEmitter.tick(self, dt)
 
         if random.random()>0.95:
-            self._particles.appendleft((0, MutableBool(True), self._pos.copy(), set_z(random_vec3_in_cone(vec3(0, -1, 0), np.pi/4*random.random()+np.pi/8)*1, 0), self._elapsed_time))
+            self._particles.appendleft((0, MutableBool(True), self._pos.copy(), set_z(random_vec3_in_cone(vec3(0, -1, 0), np.pi/4*random.random()+np.pi/8)*1, 0), list(Colors.white_a), self._elapsed_time))
+
+        ParticleEmitter.tick(self, dt)
+
 
 class ParticleSystem(DrawableComponent):
     def __init__(self, parent=None, pos=vec3()):
@@ -932,6 +1015,31 @@ class DebugBox(DebugDraw):
         pygame.draw.rect(screen, self.color, pygame.Rect(s2d.x, s2d.y, e2d.x-s2d.x, e2d.y-s2d.y), self.thickness)
 
 
+class DebugSpring(DebugDraw):
+    def __init__(self, game) -> None:
+        DebugDraw.__init__(self, game)
+        self._start:vec3 = vec3()
+        self._end:vec3 = vec3()
+        self._color:Colors.Color = Colors.Color(255, 0, 0)
+        self._thickness = 1
+    
+    def draw(self, screen):
+        ends_length = 0.5
+        num_spires = 15
+        width=0.5
+        camera = self.game.camera
+        if self._start==self._end: return
+        unit = (self._end-self._start).normalize()
+        length = (self._end-self._start).length()
+        ends_length=min(ends_length, length/2)
+        side=vec3(0,0,1).cross(unit).normalize() if vec3(0,0,1).dot(unit)==0 else vec3(0,1,0).cross(unit).normalize()
+        offset = self._start+unit*ends_length
+        pygame.draw.line(screen, self._color, camera.world_to_screen(self._start), camera.world_to_screen(offset), self._thickness)
+        stride = (length-2*ends_length)/num_spires
+        for i in range(num_spires):
+            pygame.draw.lines(screen, self._color, False, [camera.world_to_screen(offset+i*stride*unit), camera.world_to_screen(offset+i*stride*unit+stride/2*unit+(width*side if i%2 else -width*side)), camera.world_to_screen(offset+(i+1)*stride*unit)])
+        pygame.draw.line(screen, self._color, camera.world_to_screen(self._end-unit*ends_length), camera.world_to_screen(self._end), self._thickness)
+
 class Scene:
     def __init__(self):
         self._objects : List[SceneComponent] = []
@@ -941,7 +1049,7 @@ class Scene:
         self._tilemaps : list[Tilemap] = []
         self._tilesets : list[Tileset] = []
         self._backgrounds : list[SpriteComponent] = []
-        self._ambient_light = 0.3
+        self._ambient_light = vec3(1., 1., 1.)*0.5
         self._lights : list[Light] = []
         self._lightmap : pygame.Surface = pygame.surface.Surface(vec2(10, 10))
     
@@ -974,10 +1082,14 @@ class Scene:
             for obj in self._drawables:
                 obj.draw()
     
+    def set_ambient_light(self, val:vec3):
+        self._ambient_light = val
+        return self
+    
     def light_pass(self):
         if self._lightmap.get_size()!=Globals.game.size:
             self._lightmap = pygame.surface.Surface(Globals.game.size)
-        self._lightmap.fill(color_from_vec3(self._ambient_light*255*vec3(1, 1, 1)))
+        self._lightmap.fill(color_from_vec3(self._ambient_light*255))
         if not self.manual_rendering:
             for light in self._lights:
                 light.draw()
@@ -1127,13 +1239,34 @@ class FrictionForce(Force):
         self.friction = 0.9
     
     def get(self, object:Union['PhysicsComponent',None]=None):
-        if object and object.vel.length()>0:
+        if object and object.vel.length_squared()>0:
             return -self.friction * object.vel.normalize()*(object.vel.length()**1.2) if object.get_world_position().z<1 else vec3()
         return vec3()
 
 class GravityForce(Force):
-    def __init__(self, strength:float=-2):
-        Force.__init__(self, vec3(0, 0, strength))
+    def __init__(self, strength:float=-2, axis=None):
+        Force.__init__(self, (axis if axis else vec3(0, 0, 1))*strength)
+
+class CollisionPoint:
+    def __init__(self, a:None|vec3, b:None|vec3) -> None:
+        self._a:vec3 = a if a else vec3()
+        self._b:vec3 = b if b else vec3()
+        self._normal:vec3=(self._b-self._a).normalize()
+        self._depth:float=(self._b-self._a).length()
+        pass
+
+class Collision:
+    def __init__(self, objectA:'PhysicsComponent', objectB:'PhysicsComponent', collision_point:CollisionPoint) -> None:
+        self._objA = objectA
+        self._objB = objectB
+        self._collision_point = collision_point
+
+class Solver:
+    def __init__(self) -> None:
+        pass
+
+    def solve(self, collisions:list[Collision], dt:float):
+        pass
 
 class PhysicsComponent(DrawableComponent, SceneComponent):
     def __init__(self, parent, world : PhysicsWorld, pos=None, mass:float=1):
@@ -1144,14 +1277,26 @@ class PhysicsComponent(DrawableComponent, SceneComponent):
         self.acc = vec3()
         self.simulate_physics = True
 
+        self._bounding_box = BoundingBox(self._pos-self._size/2, self._pos+self._size/2)
+
         self.forces    :list[Force] = []
         self.one_forces:list[Force] = []
 
         world.register_physics_component(self)
     
+    @SceneComponent.size.setter
+    def size(self, s):
+        self._size = s
+        self._bounding_box = BoundingBox(self._pos-self.size/2, self._pos+self.size/2)
+    
+    def set_size(self, size:vec3):
+        DrawableComponent.set_size(self, size)
+        self._bounding_box = BoundingBox(self._pos-self.size/2, self._pos+self.size/2)
+        return self
+
     def draw(self):
-        Globals.game.draw_debug_rectangle(Globals.game.camera.world_to_screen(self._pos-vec3(5, 5, 0)),
-                                        Globals.game.camera.world_to_screen(self._pos+vec3(5, 5, 0)), color=vec3(255, 150, 0), thickness=1)
+        Globals.game.draw_debug_rectangle(Globals.game.camera.world_to_screen(set_z(self._bounding_box._begin, 0)),
+                                        Globals.game.camera.world_to_screen(set_z(self._bounding_box._end, 0)), color=vec3(255, 150, 0), thickness=1)
         pass
     
     def tick(self, dt:float):
@@ -1216,7 +1361,7 @@ class PhysicsComponent(DrawableComponent, SceneComponent):
                 self._pos.z = self.world.limits[1].z
         
         Globals.game.draw_debug_vector(self._pos, self._pos+0.1*self.vel, (10,255,10))
-        Globals.game.draw_debug_box(self._pos-set_z(self.size/2, 0), self._pos+set_z(self.size/2, 0), (0, 0, 255), thickness=1)
+        # Globals.game.draw_debug_box(self._pos-set_z(self.size/2, 0), self._pos+set_z(self.size/2, 0), (0, 0, 255), thickness=1)
 
 class SpriteComponent(DrawableComponent):
     def __init__(self, parent, pos=vec3(), size=vec2(1, 1), image_name="default"):
@@ -1244,10 +1389,6 @@ class SpriteComponent(DrawableComponent):
     def set_draw_offset(self, offset:vec2):
         self._draw_offset = offset
 
-
-class Solver:
-    def __init__(self) -> None:
-        pass
 
 class Actor(Object):
     def __init__(self, pos=vec3()):
